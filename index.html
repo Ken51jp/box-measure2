@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AIダンボール計測くん</title>
+    <style>
+        body { font-family: sans-serif; margin: 0; background: #f0f0f0; text-align: center; overflow: hidden; }
+        #ui-layer { position: fixed; top: 0; width: 100%; background: rgba(255,255,255,0.9); padding: 10px; z-index: 10; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        #canvas-container { margin-top: 80px; position: relative; display: flex; justify-content: center; }
+        canvas { max-width: 100%; height: auto; border: 1px solid #ccc; background: #fff; touch-action: none; }
+        .btn { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; font-size: 16px; margin: 5px; }
+        #result { font-weight: bold; color: #d9534f; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+<div id="ui-layer">
+    <div id="instruction">手順1: 写真を選択してください</div>
+    <input type="file" id="file-input" accept="image/*" style="display:none">
+    <button class="btn" onclick="document.getElementById('file-input').click()">写真を選択</button>
+    <button class="btn" onclick="resetAll()">やり直し</button>
+    <div id="result"></div>
+</div>
+
+<div id="canvas-container">
+    <canvas id="canvas"></canvas>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const fileInput = document.getElementById('file-input');
+const instruction = document.getElementById('instruction');
+const resultDiv = document.getElementById('result');
+
+let img = new Image();
+let points = [];
+let ratio = 0; // 1ピクセルあたりのmm
+const CARD_LONG_SIDE_MM = 85.6; // クレジットカードの長い方の辺
+
+fileInput.onchange = (e) => {
+    const file = e.target.files[0];
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        img.onload = () => {
+            // スマホの画面に合わせてキャンバスサイズを調整
+            const scale = window.innerWidth / img.width;
+            canvas.width = window.innerWidth;
+            canvas.height = img.height * scale;
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            instruction.innerText = "手順2: カードの「長い辺」の端と端をタップ（2点）";
+        };
+        img.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+};
+
+canvas.addEventListener('pointerdown', (e) => {
+    if (!img.src) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    points.push({x, y});
+
+    // 点を描画
+    ctx.fillStyle = "red";
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (ratio === 0 && points.length === 2) {
+        // カードの基準を計算
+        const dist = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+        ratio = CARD_LONG_SIDE_MM / dist;
+        points = [];
+        instruction.innerText = "手順3: 測りたい辺の端と端をタップ";
+        resultDiv.innerText = "カード認識完了！";
+    } else if (ratio > 0 && points.length === 2) {
+        // ダンボールの長さを計算
+        const dist = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+        const mm = dist * ratio;
+        const cm = (mm / 10).toFixed(1);
+        
+        // 線を引く
+        ctx.strokeStyle = "blue";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        ctx.lineTo(points[1].x, points[1].y);
+        ctx.stroke();
+
+        resultDiv.innerText = `計測結果: 約 ${cm} cm`;
+        points = []; // 次の辺を測れるようにリセット
+    }
+});
+
+function resetAll() {
+    points = [];
+    ratio = 0;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if(img.src) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    instruction.innerText = "手順2: カードの「長い辺」の端と端をタップ";
+    resultDiv.innerText = "";
+}
+</script>
+
+</body>
+</html>
