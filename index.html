@@ -3,23 +3,45 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>MeasureBox AI - Guideline Assist</title>
+    <title>MeasureBox AI - Fixed Click</title>
     <style>
         body { font-family: -apple-system, sans-serif; margin: 0; background: #000; color: #fff; text-align: center; overflow: hidden; }
-        #ui-layer { position: fixed; top: 0; width: 100%; background: rgba(28,28,30,0.95); backdrop-filter: blur(20px); padding: 15px 0; z-index: 1000; }
+        
+        /* UIレイヤー：確実に最前面へ */
+        #ui-layer { 
+            position: fixed; top: 0; width: 100%; 
+            background: rgba(28,28,30,0.95); backdrop-filter: blur(20px); 
+            padding: 15px 0; z-index: 9999; /* 非常に高い値を設定 */
+            pointer-events: auto;
+        }
+        
         #instruction { font-size: 13px; color: #FFF; margin-bottom: 5px; font-weight: bold; letter-spacing: 1px; }
         #result { font-size: 20px; font-weight: bold; color: #FFF; min-height: 30px; margin-bottom: 5px; }
+        
         .ref-selector { display: flex; justify-content: center; gap: 5px; margin-bottom: 10px; }
         .ref-btn { background: #2C2C2E; color: #8E8E93; border: 1px solid #3A3A3C; padding: 5px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; }
         .ref-btn.active { background: #48484A; color: #FFF; border-color: #636366; }
+
         #measure-list { background: rgba(44,44,46,0.8); margin: 5px 20px 10px; padding: 10px; border-radius: 12px; display: flex; justify-content: space-around; font-size: 14px; }
         .measure-item { display: flex; flex-direction: column; }
         .measure-val { font-size: 18px; font-weight: bold; color: #fff; }
+
         .btn-group { display: flex; justify-content: center; gap: 8px; margin-top: 5px; }
-        .btn { background: #3A3A3C; color: #fff; border: none; padding: 12px 18px; border-radius: 12px; font-weight: 600; font-size: 14px; cursor: pointer; }
+        .btn { 
+            background: #3A3A3C; color: #fff; border: none; padding: 12px 18px; 
+            border-radius: 12px; font-weight: 600; font-size: 14px; cursor: pointer;
+            -webkit-appearance: none;
+        }
         .btn-primary { background: #0A84FF; }
-        #canvas-container { position: relative; margin-top: 240px; width: 100%; z-index: 1; }
+        
+        /* キャンバス：UIと重ならないように位置調整 */
+        #canvas-container { 
+            position: absolute; top: 240px; left: 0; width: 100%; 
+            z-index: 1; touch-action: none;
+        }
         canvas { max-width: 100%; display: block; margin: 0 auto; }
+        
+        /* inputは物理的に隠すのみ */
         #file-input { display: none; }
     </style>
 </head>
@@ -38,19 +60,20 @@
         <div class="measure-item"><span>高さ(H)</span><span id="val-h" class="measure-val">-</span></div>
     </div>
     <div class="btn-group">
-        <input type="file" id="file-input" accept="image/*">
-        <button class="btn btn-primary" onclick="document.getElementById('file-input').click();">写真を選択</button>
-        <button class="btn" onclick="undo()">戻る</button>
-        <button class="btn" onclick="resetAll()">リセット</button>
+        <input type="file" id="file-input" accept="image/*" onchange="handleFile(this)">
+        <button type="button" class="btn btn-primary" onclick="document.getElementById('file-input').click();">写真を選択</button>
+        <button type="button" class="btn" onclick="undo()">戻る</button>
+        <button type="button" class="btn" onclick="resetAll()">リセット</button>
     </div>
 </div>
 
-<div id="canvas-container"><canvas id="canvas"></canvas></div>
+<div id="canvas-container">
+    <canvas id="canvas"></canvas>
+</div>
 
 <script>
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d', { willReadFrequently: true });
-const fileInput = document.getElementById('file-input');
 const instruction = document.getElementById('instruction');
 const resultDiv = document.getElementById('result');
 
@@ -66,6 +89,27 @@ let currentPos = { x: 0, y: 0 };
 const LOUPE_SIZE = 130;
 const ZOOM_LEVEL = 3;
 
+// ファイル読み込み処理
+function handleFile(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+        img = new Image();
+        img.onload = () => {
+            const scale = window.innerWidth / img.width;
+            canvas.width = window.innerWidth;
+            canvas.height = img.height * scale;
+            resetData();
+            render();
+            updateInstruction();
+        };
+        img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+}
+
+// 境界線スナップ
 function getSmartEdgeSnap(rawX, rawY) {
     const range = 10;
     try {
@@ -92,25 +136,6 @@ function setRef(mode) {
     resetAll();
 }
 
-fileInput.onchange = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-        img = new Image();
-        img.onload = () => {
-            const scale = window.innerWidth / img.width;
-            canvas.width = window.innerWidth;
-            canvas.height = img.height * scale;
-            resetData();
-            render();
-            updateInstruction();
-        };
-        img.src = ev.target.result;
-    };
-    reader.readAsDataURL(file);
-};
-
 function undo() {
     if (points.length > 0) points.pop();
     else if (measurements.length > 0) { measurements.pop(); updateList(); updateInstruction(); }
@@ -122,9 +147,15 @@ function render() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (img.src) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     
-    // ガイドラインの描画（1点目が打たれている場合）
+    // ガイドライン
     if (points.length === 1 && isPressing) {
-        drawGuidelines(points[0]);
+        ctx.save();
+        ctx.strokeStyle = "rgba(10, 132, 255, 0.5)";
+        ctx.setLineDash([5, 5]);
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(points[0].x, 0); ctx.lineTo(points[0].x, canvas.height); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, points[0].y); ctx.lineTo(canvas.width, points[0].y); ctx.stroke();
+        ctx.restore();
     }
 
     points.forEach((p, i) => {
@@ -138,32 +169,53 @@ function render() {
     if (isPressing && img.src) drawLoupe();
 }
 
-// 垂直・水平ガイドラインを描画する関数
-function drawGuidelines(p) {
-    ctx.save();
-    ctx.strokeStyle = "rgba(10, 132, 255, 0.5)"; // 控えめな青
-    ctx.setLineDash([5, 5]); // 点線
-    ctx.lineWidth = 1;
-    
-    // 垂直線
-    ctx.beginPath();
-    ctx.moveTo(p.x, 0);
-    ctx.lineTo(p.x, canvas.height);
-    ctx.stroke();
-    
-    // 水平線
-    ctx.beginPath();
-    ctx.moveTo(0, p.y);
-    ctx.lineTo(canvas.width, p.y);
-    ctx.stroke();
-    
-    ctx.restore();
-}
-
 function drawLoupe() {
     const lX = currentPos.x, lY = currentPos.y, off = 90;
     ctx.save();
     ctx.beginPath(); ctx.arc(lX, lY - off, LOUPE_SIZE/2, 0, Math.PI*2);
     ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.stroke(); ctx.clip();
     const s = LOUPE_SIZE / ZOOM_LEVEL;
-    ctx.drawImage(canvas, lX-s/2, lY-s/2, s, s, lX-LOUPE_SIZE/2, lY-off-LOUPE_SIZE/2, LOUPE_SIZE, LOUPE_SIZE
+    ctx.drawImage(canvas, lX-s/2, lY-s/2, s, s, lX-LOUPE_SIZE/2, lY-off-LOUPE_SIZE/2, LOUPE_SIZE, LOUPE_SIZE);
+    ctx.restore();
+    ctx.beginPath(); ctx.strokeStyle = "#0A84FF"; ctx.lineWidth = 2;
+    ctx.moveTo(lX, lY-off-15); ctx.lineTo(lX, lY-off+15); ctx.moveTo(lX-15, lY-off); ctx.lineTo(lX+15, lY-off); ctx.stroke();
+}
+
+const handleEnd = () => {
+    if (!isPressing) return;
+    isPressing = false;
+    if (img.src) {
+        const snapped = getSmartEdgeSnap(currentPos.x, currentPos.y);
+        points.push(snapped);
+        if (points.length === 2) {
+            const dist = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+            if (ratio === 0) {
+                ratio = REF_VALUES[currentRefMode] / dist;
+                setTimeout(() => { points = []; render(); updateInstruction(); }, 600);
+            } else {
+                measurements.push(parseFloat(((dist * ratio) / 10).toFixed(1)));
+                updateList();
+                if (measurements.length < 3) {
+                    updateInstruction();
+                    setTimeout(() => { points = []; render(); }, 400);
+                } else { instruction.innerText = "全計測完了"; }
+            }
+        }
+    }
+    render();
+};
+
+function updateInstruction() {
+    if (ratio === 0) instruction.innerText = `【基準】${currentRefMode==='card'?'カード':'A4用紙'}の長辺をタップ`;
+    else if (measurements.length < 3) instruction.innerText = `【計測】${labels[measurements.length]}`;
+}
+
+function updateList() {
+    const ids = ["val-w", "val-d", "val-h"];
+    let total = 0;
+    ids.forEach((id, i) => {
+        const val = measurements[i] || "-";
+        document.getElementById(id).innerText = val + (val === "-" ? "" : "cm");
+        if (val !== "-") total += val;
+    });
+    resultDiv.innerText = measurements.length > 0 ? `3辺合計: ${total.toFixed
