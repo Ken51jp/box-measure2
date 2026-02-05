@@ -3,108 +3,222 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AIダンボール計測くん</title>
+    <title>MeasureBox AI - Edge Detection</title>
     <style>
-        body { font-family: sans-serif; margin: 0; background: #f0f0f0; text-align: center; overflow: hidden; }
-        #ui-layer { position: fixed; top: 0; width: 100%; background: rgba(255,255,255,0.9); padding: 10px; z-index: 10; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        #canvas-container { margin-top: 80px; position: relative; display: flex; justify-content: center; }
-        canvas { max-width: 100%; height: auto; border: 1px solid #ccc; background: #fff; touch-action: none; }
-        .btn { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; font-size: 16px; margin: 5px; }
-        #result { font-weight: bold; color: #d9534f; margin-top: 10px; }
+        body { font-family: -apple-system, sans-serif; margin: 0; background: #000; color: #fff; text-align: center; overflow: hidden; }
+        #ui-layer { position: fixed; top: 0; width: 100%; background: rgba(28,28,30,0.95); backdrop-filter: blur(20px); padding: 15px 0; z-index: 1000; }
+        #instruction { font-size: 13px; color: #FFF; margin-bottom: 5px; font-weight: bold; letter-spacing: 1px; }
+        #result { font-size: 20px; font-weight: bold; color: #FFF; min-height: 30px; margin-bottom: 5px; }
+        .ref-selector { display: flex; justify-content: center; gap: 5px; margin-bottom: 10px; }
+        .ref-btn { background: #2C2C2E; color: #8E8E93; border: 1px solid #3A3A3C; padding: 5px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; }
+        .ref-btn.active { background: #48484A; color: #FFF; border-color: #636366; }
+        #measure-list { background: rgba(44,44,46,0.8); margin: 5px 20px 10px; padding: 10px; border-radius: 12px; display: flex; justify-content: space-around; font-size: 14px; }
+        .measure-item { display: flex; flex-direction: column; }
+        .measure-val { font-size: 18px; font-weight: bold; color: #fff; }
+        .btn-group { display: flex; justify-content: center; gap: 8px; margin-top: 5px; }
+        .btn { background: #3A3A3C; color: #fff; border: none; padding: 12px 18px; border-radius: 12px; font-weight: 600; font-size: 14px; cursor: pointer; }
+        .btn-primary { background: #0A84FF; }
+        #canvas-container { position: relative; margin-top: 240px; width: 100%; z-index: 1; }
+        canvas { max-width: 100%; display: block; margin: 0 auto; }
+        #file-input { display: none; }
     </style>
 </head>
 <body>
 
 <div id="ui-layer">
-    <div id="instruction">手順1: 写真を選択してください</div>
-    <input type="file" id="file-input" accept="image/*" style="display:none">
-    <button class="btn" onclick="document.getElementById('file-input').click()">写真を選択</button>
-    <button class="btn" onclick="resetAll()">やり直し</button>
-    <div id="result"></div>
+    <div id="instruction">写真を選択してください</div>
+    <div class="ref-selector">
+        <div id="ref-card" class="ref-btn active" onclick="setRef('card')">💳 カード</div>
+        <div id="ref-a4" class="ref-btn" onclick="setRef('a4')">📄 A4用紙</div>
+    </div>
+    <div id="result">3辺合計: - cm</div>
+    <div id="measure-list">
+        <div class="measure-item"><span>幅(W)</span><span id="val-w" class="measure-val">-</span></div>
+        <div class="measure-item"><span>奥行(D)</span><span id="val-d" class="measure-val">-</span></div>
+        <div class="measure-item"><span>高さ(H)</span><span id="val-h" class="measure-val">-</span></div>
+    </div>
+    <div class="btn-group">
+        <input type="file" id="file-input" accept="image/*">
+        <button class="btn btn-primary" onclick="document.getElementById('file-input').click();">写真を選択</button>
+        <button class="btn" onclick="undo()">戻る</button>
+        <button class="btn" onclick="resetAll()">リセット</button>
+    </div>
 </div>
 
-<div id="canvas-container">
-    <canvas id="canvas"></canvas>
-</div>
+<div id="canvas-container"><canvas id="canvas"></canvas></div>
 
 <script>
 const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
+const ctx = canvas.getContext('2d', { willReadFrequently: true });
 const fileInput = document.getElementById('file-input');
 const instruction = document.getElementById('instruction');
 const resultDiv = document.getElementById('result');
 
 let img = new Image();
 let points = [];
-let ratio = 0; // 1ピクセルあたりのmm
-const CARD_LONG_SIDE_MM = 85.6; // クレジットカードの長い方の辺
+let ratio = 0; 
+let currentRefMode = 'card';
+const REF_VALUES = { 'card': 85.6, 'a4': 297 };
+let measurements = [];
+const labels = ["幅 (Width)", "奥行 (Depth)", "高さ (Height)"];
+let isPressing = false;
+let currentPos = { x: 0, y: 0 };
+const LOUPE_SIZE = 130;
+const ZOOM_LEVEL = 3;
+
+// --- AIエッジ抽出スナップ ---
+function getSmartEdgeSnap(rawX, rawY) {
+    const range = currentRefMode === 'a4' ? 15 : 8; // A4モードは広めに探索
+    try {
+        const imageData = ctx.getImageData(rawX - range, rawY - range, range * 2, range * 2);
+        const data = imageData.data;
+        let bestX = rawX, bestY = rawY;
+        let maxEdgeStrength = -1;
+
+        for (let y = 1; y < range * 2 - 1; y++) {
+            for (let x = 1; x < range * 2 - 1; x++) {
+                const idx = (y * (range * 2) + x) * 4;
+                
+                // 輝度(Luminance)を計算
+                const r = data[idx], g = data[idx+1], b = data[idx+2];
+                const lum = (r * 0.299 + g * 0.587 + b * 0.114);
+
+                // ホワイト・セグメンテーション（白に近い色を優先）
+                const isWhiteish = (r > 180 && g > 180 && b > 180) ? 1.5 : 1.0;
+
+                // 簡易ソーベルフィルタ（隣接画素との輝度差）
+                const diffX = Math.abs(lum - (data[idx+4]*0.299 + data[idx+5]*0.587 + data[idx+6]*0.114));
+                const diffY = Math.abs(lum - (data[idx+(range*2*4)]*0.299 + data[idx+(range*2*4)+1]*0.587 + data[idx+(range*2*4)+2]*0.114));
+                
+                const edgeStrength = (diffX + diffY) * isWhiteish;
+
+                if (edgeStrength > maxEdgeStrength) {
+                    maxEdgeStrength = edgeStrength;
+                    bestX = (rawX - range) + x;
+                    bestY = (rawY - range) + y;
+                }
+            }
+        }
+        // 境界がはっきりしている場合のみ吸着
+        return maxEdgeStrength > 40 ? { x: bestX, y: bestY } : { x: rawX, y: rawY };
+    } catch(e) { return { x: rawX, y: rawY }; }
+}
+
+function setRef(mode) {
+    currentRefMode = mode;
+    document.getElementById('ref-card').className = 'ref-btn' + (mode === 'card' ? ' active' : '');
+    document.getElementById('ref-a4').className = 'ref-btn' + (mode === 'a4' ? ' active' : '');
+    resetAll();
+}
 
 fileInput.onchange = (e) => {
     const file = e.target.files[0];
+    if (!file) return;
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = (ev) => {
+        img = new Image();
         img.onload = () => {
-            // スマホの画面に合わせてキャンバスサイズを調整
             const scale = window.innerWidth / img.width;
             canvas.width = window.innerWidth;
             canvas.height = img.height * scale;
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            instruction.innerText = "手順2: カードの「長い辺」の端と端をタップ（2点）";
+            resetData();
+            render();
+            updateInstruction();
         };
-        img.src = event.target.result;
+        img.src = ev.target.result;
     };
     reader.readAsDataURL(file);
 };
 
-canvas.addEventListener('pointerdown', (e) => {
-    if (!img.src) return;
-    
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    points.push({x, y});
-
-    // 点を描画
-    ctx.fillStyle = "red";
-    ctx.beginPath();
-    ctx.arc(x, y, 5, 0, Math.PI * 2);
-    ctx.fill();
-
-    if (ratio === 0 && points.length === 2) {
-        // カードの基準を計算
-        const dist = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
-        ratio = CARD_LONG_SIDE_MM / dist;
-        points = [];
-        instruction.innerText = "手順3: 測りたい辺の端と端をタップ";
-        resultDiv.innerText = "カード認識完了！";
-    } else if (ratio > 0 && points.length === 2) {
-        // ダンボールの長さを計算
-        const dist = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
-        const mm = dist * ratio;
-        const cm = (mm / 10).toFixed(1);
-        
-        // 線を引く
-        ctx.strokeStyle = "blue";
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(points[0].x, points[0].y);
-        ctx.lineTo(points[1].x, points[1].y);
-        ctx.stroke();
-
-        resultDiv.innerText = `計測結果: 約 ${cm} cm`;
-        points = []; // 次の辺を測れるようにリセット
-    }
-});
-
-function resetAll() {
-    points = [];
-    ratio = 0;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if(img.src) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    instruction.innerText = "手順2: カードの「長い辺」の端と端をタップ";
-    resultDiv.innerText = "";
+function undo() {
+    if (points.length > 0) points.pop();
+    else if (measurements.length > 0) { measurements.pop(); updateList(); updateInstruction(); }
+    else if (ratio !== 0) { ratio = 0; updateInstruction(); }
+    render();
 }
-</script>
 
+function render() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (img.src) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    points.forEach((p, i) => {
+        ctx.fillStyle = ratio === 0 ? "#FF3B30" : "#0A84FF";
+        ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI * 2); ctx.fill();
+        if (i === 1) {
+            ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y); ctx.lineTo(points[1].x, points[1].y); ctx.stroke();
+        }
+    });
+    if (isPressing && img.src) drawLoupe();
+}
+
+function drawLoupe() {
+    const lX = currentPos.x, lY = currentPos.y, off = 90;
+    ctx.save();
+    ctx.beginPath(); ctx.arc(lX, lY - off, LOUPE_SIZE/2, 0, Math.PI*2);
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.stroke(); ctx.clip();
+    const s = LOUPE_SIZE / ZOOM_LEVEL;
+    ctx.drawImage(canvas, lX-s/2, lY-s/2, s, s, lX-LOUPE_SIZE/2, lY-off-LOUPE_SIZE/2, LOUPE_SIZE, LOUPE_SIZE);
+    ctx.restore();
+    ctx.beginPath(); ctx.strokeStyle = "#0A84FF"; ctx.lineWidth = 2;
+    ctx.moveTo(lX, lY-off-15); ctx.lineTo(lX, lY-off+15); ctx.moveTo(lX-15, lY-off); ctx.lineTo(lX+15, lY-off); ctx.stroke();
+}
+
+const handleEnd = () => {
+    if (!isPressing) return;
+    isPressing = false;
+    if (img.src) {
+        const snapped = getSmartEdgeSnap(currentPos.x, currentPos.y);
+        points.push(snapped);
+        if (points.length === 2) {
+            const dist = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+            if (ratio === 0) {
+                ratio = REF_VALUES[currentRefMode] / dist;
+                setTimeout(() => { points = []; render(); updateInstruction(); }, 600);
+            } else {
+                measurements.push(parseFloat(((dist * ratio) / 10).toFixed(1)));
+                updateList();
+                if (measurements.length < 3) {
+                    updateInstruction();
+                    setTimeout(() => { points = []; render(); }, 400);
+                } else { instruction.innerText = "全計測完了"; }
+            }
+        }
+    }
+    render();
+};
+
+function updateInstruction() {
+    if (ratio === 0) instruction.innerText = `【基準】${currentRefMode==='card'?'カード':'A4用紙'}の長辺の端をタップ`;
+    else if (measurements.length < 3) instruction.innerText = `【計測】${labels[measurements.length]}`;
+}
+
+function updateList() {
+    const ids = ["val-w", "val-d", "val-h"];
+    let total = 0;
+    ids.forEach((id, i) => {
+        const val = measurements[i] || "-";
+        document.getElementById(id).innerText = val + (val === "-" ? "" : "cm");
+        if (val !== "-") total += val;
+    });
+    resultDiv.innerText = measurements.length > 0 ? `3辺合計: ${total.toFixed(1)} cm` : "3辺合計: - cm";
+}
+
+function resetData() { ratio = 0; points = []; measurements = []; updateList(); }
+function resetAll() { resetData(); render(); updateInstruction(); }
+
+function updatePos(e) {
+    const rect = canvas.getBoundingClientRect();
+    const cX = (e.touches ? e.touches[0].clientX : e.clientX);
+    const cY = (e.touches ? e.touches[0].clientY : e.clientY);
+    currentPos.x = cX - rect.left; currentPos.y = cY - rect.top;
+}
+
+canvas.addEventListener('touchstart', (e) => { if(!img.src) return; e.preventDefault(); isPressing = true; updatePos(e); render(); });
+canvas.addEventListener('touchmove', (e) => { if(!img.src) return; e.preventDefault(); updatePos(e); render(); });
+canvas.addEventListener('touchend', (e) => { if(!img.src) return; e.preventDefault(); handleEnd(); });
+canvas.onmousedown = (e) => { if(!img.src) return; isPressing = true; updatePos(e); render(); };
+canvas.onmousemove = (e) => { if(isPressing){ updatePos(e); render(); } };
+canvas.onmouseup = handleEnd;
+</script>
 </body>
 </html>
