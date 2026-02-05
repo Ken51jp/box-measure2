@@ -3,21 +3,35 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>MeasureBox AI - Edge Detection</title>
+    <title>MeasureBox AI - Smart Edge</title>
     <style>
         body { font-family: -apple-system, sans-serif; margin: 0; background: #000; color: #fff; text-align: center; overflow: hidden; }
-        #ui-layer { position: fixed; top: 0; width: 100%; background: rgba(28,28,30,0.95); backdrop-filter: blur(20px); padding: 15px 0; z-index: 1000; }
+        
+        /* UIレイヤー：白文字とコンパクトな合計表示 */
+        #ui-layer { 
+            position: fixed; top: 0; width: 100%; 
+            background: rgba(28,28,30,0.95); backdrop-filter: blur(20px); 
+            padding: 15px 0; z-index: 1000; 
+        }
         #instruction { font-size: 13px; color: #FFF; margin-bottom: 5px; font-weight: bold; letter-spacing: 1px; }
         #result { font-size: 20px; font-weight: bold; color: #FFF; min-height: 30px; margin-bottom: 5px; }
+        
         .ref-selector { display: flex; justify-content: center; gap: 5px; margin-bottom: 10px; }
         .ref-btn { background: #2C2C2E; color: #8E8E93; border: 1px solid #3A3A3C; padding: 5px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; }
         .ref-btn.active { background: #48484A; color: #FFF; border-color: #636366; }
+
         #measure-list { background: rgba(44,44,46,0.8); margin: 5px 20px 10px; padding: 10px; border-radius: 12px; display: flex; justify-content: space-around; font-size: 14px; }
         .measure-item { display: flex; flex-direction: column; }
         .measure-val { font-size: 18px; font-weight: bold; color: #fff; }
+
         .btn-group { display: flex; justify-content: center; gap: 8px; margin-top: 5px; }
-        .btn { background: #3A3A3C; color: #fff; border: none; padding: 12px 18px; border-radius: 12px; font-weight: 600; font-size: 14px; cursor: pointer; }
+        .btn { 
+            background: #3A3A3C; color: #fff; border: none; padding: 12px 18px; 
+            border-radius: 12px; font-weight: 600; font-size: 14px; cursor: pointer;
+        }
         .btn-primary { background: #0A84FF; }
+        
+        /* キャンバス：UIの下に配置 */
         #canvas-container { position: relative; margin-top: 240px; width: 100%; z-index: 1; }
         canvas { max-width: 100%; display: block; margin: 0 auto; }
         #file-input { display: none; }
@@ -66,9 +80,9 @@ let currentPos = { x: 0, y: 0 };
 const LOUPE_SIZE = 130;
 const ZOOM_LEVEL = 3;
 
-// --- AIエッジ抽出スナップ ---
+// --- AIスマートエッジ抽出 ---
 function getSmartEdgeSnap(rawX, rawY) {
-    const range = currentRefMode === 'a4' ? 15 : 8; // A4モードは広めに探索
+    const range = currentRefMode === 'a4' ? 12 : 8; 
     try {
         const imageData = ctx.getImageData(rawX - range, rawY - range, range * 2, range * 2);
         const data = imageData.data;
@@ -78,29 +92,26 @@ function getSmartEdgeSnap(rawX, rawY) {
         for (let y = 1; y < range * 2 - 1; y++) {
             for (let x = 1; x < range * 2 - 1; x++) {
                 const idx = (y * (range * 2) + x) * 4;
-                
-                // 輝度(Luminance)を計算
                 const r = data[idx], g = data[idx+1], b = data[idx+2];
                 const lum = (r * 0.299 + g * 0.587 + b * 0.114);
 
-                // ホワイト・セグメンテーション（白に近い色を優先）
-                const isWhiteish = (r > 180 && g > 180 && b > 180) ? 1.5 : 1.0;
+                // A4用紙（白）を優先するための重み
+                const whiteBoost = (currentRefMode === 'a4' && r > 160 && g > 160 && b > 160) ? 1.4 : 1.0;
 
-                // 簡易ソーベルフィルタ（隣接画素との輝度差）
+                // 輝度の変化率（簡易エッジ検出）
                 const diffX = Math.abs(lum - (data[idx+4]*0.299 + data[idx+5]*0.587 + data[idx+6]*0.114));
                 const diffY = Math.abs(lum - (data[idx+(range*2*4)]*0.299 + data[idx+(range*2*4)+1]*0.587 + data[idx+(range*2*4)+2]*0.114));
                 
-                const edgeStrength = (diffX + diffY) * isWhiteish;
+                const strength = (diffX + diffY) * whiteBoost;
 
-                if (edgeStrength > maxEdgeStrength) {
-                    maxEdgeStrength = edgeStrength;
+                if (strength > maxEdgeStrength) {
+                    maxEdgeStrength = strength;
                     bestX = (rawX - range) + x;
                     bestY = (rawY - range) + y;
                 }
             }
         }
-        // 境界がはっきりしている場合のみ吸着
-        return maxEdgeStrength > 40 ? { x: bestX, y: bestY } : { x: rawX, y: rawY };
+        return maxEdgeStrength > 35 ? { x: bestX, y: bestY } : { x: rawX, y: rawY };
     } catch(e) { return { x: rawX, y: rawY }; }
 }
 
@@ -188,7 +199,7 @@ const handleEnd = () => {
 };
 
 function updateInstruction() {
-    if (ratio === 0) instruction.innerText = `【基準】${currentRefMode==='card'?'カード':'A4用紙'}の長辺の端をタップ`;
+    if (ratio === 0) instruction.innerText = `【基準】${currentRefMode==='card'?'カード':'A4用紙'}の長辺をタップ`;
     else if (measurements.length < 3) instruction.innerText = `【計測】${labels[measurements.length]}`;
 }
 
